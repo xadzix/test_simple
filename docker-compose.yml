@@ -1,0 +1,72 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pricehub}
+      POSTGRES_USER: ${POSTGRES_USER:-pricehub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pricehub}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pricehub} -d ${POSTGRES_DB:-pricehub}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://pricehub:pricehub@db:5432/pricehub}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-docker-development-key}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://pricehub:pricehub@db:5432/pricehub}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-docker-development-key}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: celery -A config worker -l info --concurrency=2 --uid=nobody --gid=nogroup
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  media_data:
