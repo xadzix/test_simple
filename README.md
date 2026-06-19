@@ -38,8 +38,6 @@ docker compose down
 docker compose down -v
 ```
 
-Настройки можно переопределить в `.env` по образцу `.env.example`.
-
 
 ## Проверка
 
